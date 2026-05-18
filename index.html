@@ -70,7 +70,7 @@
     // --- SETUP FIREBASE REALTIME DATABASE ---
     // PENTING: Ganti kredensial di bawah ini dengan proyek Firebase Console milik Anda!
     const firebaseConfig = {
-      apiKey: "AIzaSyDhRvDus2APeRwUJmvjSIhiNh0An52vseQ", // Menggunakan API Key yang Anda bagikan di log
+      apiKey: "AIzaSyBIiDNYQe_H3_TpYZ2H9Dd7CCWu9yXvAqo", // Menggunakan API Key yang Anda bagikan di log
       authDomain: "wivms-capstone.firebaseapp.com",
       databaseURL: "https://wivms-capstone-default-rtdb.firebaseio.com", // Ganti dengan URL database Anda
       projectId: "wivms-capstone",
@@ -87,7 +87,7 @@
 
     // --- INTEGRASI GEMINI API ---
     const callGeminiAPI = async (prompt, systemPrompt = "") => {
-      const apiKey = "AIzaSyDhRvDus2APeRwUJmvjSIhiNh0An52vseQ"; // Otomatis diselaraskan dengan API Key aktif Anda
+      const apiKey = "AIzaSyBIiDNYQe_H3_TpYZ2H9Dd7CCWu9yXvAqo"; // Otomatis diselaraskan dengan API Key aktif Anda
       
       // PERBAIKAN: Memastikan hanya ada satu deklarasi variabel url
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
