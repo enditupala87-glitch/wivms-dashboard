@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WiVMS Dashboard - ADXL354</title>
+  
+  <!-- 1. TAILWIND CSS (UNTUK TAMPILAN FUTURISTIK & RESPONSIF) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- 2. REACT & DOM (VERSI PRODUCTION) -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  
+  <!-- 3. BABEL COMPILER (UNTUK MENERJEMAHKAN JSX DI BROWSER SECARA LANGSUNG) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- 4. LUCIDE ICONS (UNTUK IKON MODERN) -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- 5. FIREBASE LIBRARIES (MENGGUNAKAN VERSI COMPAT AGAR COCOK DI SINGLE HTML) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+
+  <!-- STYLE KUSTOM UNTUK ANIMASI VIBRASI FISIK MOTOR DC -->
+  <style>
+    @keyframes vibration-light {
+      0% { transform: translate(0.5px, 0.5px) rotate(0deg); }
+      50% { transform: translate(-0.5px, -0.5px) rotate(0.1deg); }
+      100% { transform: translate(0.5px, 0.5px) rotate(0deg); }
+    }
+    @keyframes vibration-warning {
+      0% { transform: translate(1.5px, 1.5px) rotate(0.5deg); }
+      50% { transform: translate(-1.5px, -1.5px) rotate(-0.5deg); }
+      100% { transform: translate(1.5px, 1.5px) rotate(0.5deg); }
+    }
+    @keyframes vibration-danger {
+      0% { transform: translate(3px, 3px) rotate(1deg); }
+      25% { transform: translate(-3px, -3px) rotate(-1deg); }
+      50% { transform: translate(-3px, 3px) rotate(1deg); }
+      75% { transform: translate(3px, -3px) rotate(-1deg); }
+      100% { transform: translate(3px, 3px) rotate(1deg); }
+    }
+    .motor-vibrate-light { animation: vibration-light 0.1s infinite; }
+    .motor-vibrate-warning { animation: vibration-warning 0.08s infinite; }
+    .motor-vibrate-danger { animation: vibration-danger 0.05s infinite; filter: drop-shadow(0 0 15px rgba(239, 68, 68, 0.4)); }
+    
+    .glass-panel {
+      background: rgba(30, 41, 59, 0.6);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+    }
+    
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans selection:bg-blue-500 selection:text-white relative overflow-x-hidden">
+
+  <!-- Wadah Utama Aplikasi React -->
+  <div id="root"></div>
+
+  <!-- BLOK KODE REACT (MENGGUNAKAN BABEL UNTUK EKSEKUSI LANGSUNG) -->
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // --- SETUP FIREBASE REALTIME DATABASE ---
+    // PENTING: Ganti kredensial di bawah ini dengan proyek Firebase Console milik Anda!
+    const firebaseConfig = {
+      apiKey: "CONTOH_API_KEY_FIREBASE_ANDA",
+      authDomain: "wivms-capstone.firebaseapp.com",
+      databaseURL: "https://wivms-capstone-default-rtdb.firebaseio.com", // Ganti dengan URL database Anda
+      projectId: "wivms-capstone",
+      storageBucket: "wivms-capstone.appspot.com",
+      messagingSenderId: "1234567890",
+      appId: "1:1234567890:web:abcdef123456"
+    };
+
+    // Inisialisasi Firebase Compat
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const database = firebase.database();
+
+    // --- INTEGRASI GEMINI API ---
+    const callGeminiAPI = async (prompt, systemPrompt = "") => {
+      const apiKey = ""; // API key otomatis diatur oleh lingkungan runtime
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+      
+      const payload = {
+        contents: [{ parts: [{ text: prompt }] }]
+      };
+      
+      if (systemPrompt) {
+        payload.systemInstruction = { parts: [{ text: systemPrompt }] };
+      }
+
+      // Protokol Eksponensial Backoff (Coba ulang hingga 5 kali jika gagal)
+      let delay = 1000;
+      for (let i = 0; i < 5; i++) {
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            return result.candidates?.[0]?.content?.parts?.[0]?.text || "Maaf, asisten AI tidak memberikan respon.";
+          }
+        } catch (error) {
+          if (i === 4) throw error;
+        }
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay *= 2;
+      }
+      return "Gagal terhubung dengan Gemini API.";
+    };
+
+    // --- KOMPONEN UTAMA DASHBOARD ---
+    function App() {
+      const [activeTab, setActiveTab] = useState('dashboard');
+      const [threshold] = useState(2.5); // Batas aman getaran (2.5g)
+      const [vibrationHistory, setVibrationHistory] = useState([
+        { id: 1, time: '14:20:05', x: 0.45, y: 0.52, z: 1.12, status: 'normal' },
+        { id: 2, time: '14:21:12', x: 1.82, y: 2.91, z: 3.10, status: 'danger' },
+        { id: 3, time: '14:22:30', x: 0.51, y: 0.61, z: 1.22, status: 'normal' },
+        { id: 4, time: '14:23:45', x: 1.10, y: 1.85, z: 1.95, status: 'warning' },
+      ]);
+
+      // Trigger pembuatan ikon Lucide setiap kali tab berubah
+      useEffect(() => {
+        lucide.createIcons();
+      }, [activeTab]);
+
+      const addHistoryRecord = (record) => {
+        setVibrationHistory(prev => [record, ...prev]);
+      };
+
+      const clearHistory = () => {
+        setVibrationHistory([]);
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 relative overflow-hidden">
+          {/* Latar Belakang Efek Cahaya */}
+          <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-blue-600/10 rounded-full blur-[120px] pointer-events-none"></div>
+          <div className="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-purple-600/10 rounded-full blur-[120px] pointer-events-none"></div>
+
+          {/* Navigasi Atas */}
+          <nav className="sticky top-0 z-50 glass-panel border-b-0 shadow-2xl">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+              <div className="flex items-center justify-between h-20">
+                <div className="flex items-center gap-4 cursor-pointer" onClick={() => setActiveTab('home')}>
+                  <div className="bg-gradient-to-br from-blue-500 to-indigo-600 p-2.5 rounded-xl shadow-lg shadow-blue-500/30">
+                    <i data-lucide="activity" class="h-7 w-7 text-white"></i>
+                  </div>
+                  <div>
+                    <span className="font-extrabold text-2xl tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-300">WiVMS</span>
+                    <span className="text-xs block text-slate-400 font-medium tracking-wider uppercase mt-0.5">Teknik Elektro ITERA</span>
+                  </div>
+                </div>
+                
+                {/* Menu Navigasi */}
+                <div className="hidden md:block">
+                  <div className="flex space-x-1 bg-slate-900/50 p-1.5 rounded-2xl border border-slate-700/50">
+                    <NavButton icon="home" label="Beranda" active={activeTab === 'home'} onClick={() => setActiveTab('home')} />
+                    <NavButton icon="activity" label="Live Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+                    <NavButton icon="sparkles" label="Asisten AI ✨" active={activeTab === 'ai-assistant'} onClick={() => setActiveTab('ai-assistant')} isSparkle={true} />
+                    <NavButton icon="history" label="Riwayat Data" active={activeTab === 'history'} onClick={() => setActiveTab('history')} />
+                    <NavButton icon="info" label="Proyek" active={activeTab === 'about'} onClick={() => setActiveTab('about')} />
+                    <NavButton icon="users" label="Tim" active={activeTab === 'team'} onClick={() => setActiveTab('team')} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </nav>
+
+          {/* Konten Utama */}
+          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10">
+            {activeTab === 'home' && <HomeView setActiveTab={setActiveTab} />}
+            {activeTab === 'dashboard' && (
+              <DashboardView 
+                threshold={threshold} 
+                onSaveRecord={addHistoryRecord} 
+              />
+            )}
+            {activeTab === 'ai-assistant' && <AIAssistantView />}
+            {activeTab === 'history' && (
+              <HistoryView 
+                history={vibrationHistory} 
+                onClear={clearHistory} 
+              />
+            )}
+            {activeTab === 'about' && <AboutView />}
+            {activeTab === 'team' && <TeamView />}
+          </main>
+          
+          {/* Footer */}
+          <footer className="relative z-10 border-t border-slate-800/50 mt-12 py-8 text-center text-slate-500 text-sm glass-panel rounded-t-3xl">
+            <p>&copy; 2025 Program Studi Teknik Elektro - Institut Teknologi Sumatera (ITERA).</p>
+            <p className="mt-1 flex items-center justify-center gap-2">
+               <i data-lucide="terminal" class="h-4.5 w-4.5 text-blue-400"></i> Dokumentasi Capstone Design: TA2526.01.099
+            </p>
+          </footer>
+        </div>
+      );
+    }
+
+    // --- VIEW: BERANDA ---
+    function HomeView({ setActiveTab }) {
+      return (
+        <div className="flex flex-col items-center justify-center py-12 md:py-20 text-center">
+          <div className="relative mb-8">
+            <div className="absolute inset-0 bg-blue-500 rounded-full blur-2xl opacity-45"></div>
+            <div className="bg-gradient-to-br from-blue-900 to-slate-900 p-8 rounded-full border border-blue-500/30 relative animate-pulse">
+              <i data-lucide="activity" class="h-20 w-20 text-blue-400"></i>
+            </div>
+          </div>
+          <h1 className="text-5xl md:text-7xl font-extrabold text-white mb-6 tracking-tight">
+            Wireless Vibration <br className="hidden md:block"/> 
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">Monitoring System</span>
+          </h1>
+          <p className="text-lg md:text-xl text-slate-300 max-w-3xl mb-12 leading-relaxed">
+            Sistem monitoring getaran mesin presisi tinggi berbasis sensor <b>ADXL354 MEMS Accelerometer</b>. Menyajikan transmisi data osiloskop 3-sumbu secara aman, kontinu, dan pintar.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-5 w-full sm:w-auto">
+            <button 
+              onClick={() => setActiveTab('dashboard')}
+              class="px-8 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-2xl font-bold flex items-center justify-center gap-3 transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)]"
+            >
+              <i data-lucide="activity" class="h-5.5 w-5.5"></i>
+              Buka Live Dashboard
+            </button>
+            <button 
+              onClick={() => setActiveTab('ai-assistant')}
+              class="px-8 py-4 bg-gradient-to-r from-yellow-600 to-amber-600 hover:from-yellow-500 hover:to-amber-500 text-white rounded-2xl font-bold flex items-center justify-center gap-3 transition-all shadow-[0_0_20px_rgba(217,119,6,0.4)]"
+            >
+              <i data-lucide="sparkles" class="h-5.5 w-5.5 text-white"></i>
+              Konsultasi Asisten AI ✨
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // --- VIEW: DASHBOARD REAL-TIME ---
+    function DashboardView({ threshold, onSaveRecord }) {
+      const [data, setData] = useState([]);
+      const [isOnline, setIsOnline] = useState(false);
+      const [aiAnalysis, setAiAnalysis] = useState("");
+      const [isAnalyzing, setIsAnalyzing] = useState(false);
+      const [showGuide, setShowGuide] = useState(true);
+
+      // Sinkronisasi data real-time dengan Firebase Database
+      useEffect(() => {
+        const sensorRef = database.ref('vibration_sensor');
+        
+        sensorRef.on('value', (snapshot) => {
+          if (snapshot.exists()) {
+            const firebaseData = snapshot.val();
+            setIsOnline(true);
+
+            const now = new Date();
+            const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+
+            const newData = {
+              time: timeStr,
+              x: Number(firebaseData.x || 0),
+              y: Number(firebaseData.y || 0),
+              z: Number(firebaseData.z || 0)
+            };
+
+            setData(prev => {
+              const updated = [...prev, newData];
+              if (updated.length > 25) updated.shift();
+              return updated;
+            });
+
+            const maxVal = Math.max(newData.x, newData.y, newData.z);
+            if (maxVal > threshold) {
+              onSaveRecord({
+                id: Date.now(),
+                time: timeStr,
+                x: newData.x,
+                y: newData.y,
+                z: newData.z,
+                status: maxVal > threshold + 1.0 ? 'danger' : 'warning'
+              });
+            }
+          }
+        }, (error) => {
+          console.error("Firebase Connection Error: ", error);
+          setIsOnline(false);
+        });
+
+        return () => sensorRef.off();
+      }, [threshold, onSaveRecord]);
+
+      // Inisialisasi ikon Lucide di dashboard
+      useEffect(() => {
+        lucide.createIcons();
+      }, [data, isOnline, isAnalyzing]);
+
+      const latestData = data.length > 0 ? data[data.length - 1] : { x: 0, y: 0, z: 0 };
+      const maxCurrentVib = Math.max(latestData.x, latestData.y, latestData.z);
+      
+      const currentStatus = maxCurrentVib > threshold 
+        ? (maxCurrentVib > threshold + 1.0 ? 'danger' : 'warning') 
+        : 'normal';
+
+      const isDanger = currentStatus === 'danger';
+      const isWarning = currentStatus === 'warning';
+      const isNormal = currentStatus === 'normal';
+      const hasData = data.length > 0;
+
+      let motorVibrateClass = "motor-vibrate-light";
+      if (isWarning) motorVibrateClass = "motor-vibrate-warning";
+      if (isDanger) motorVibrateClass = "motor-vibrate-danger";
+
+      const triggerAIDiagnosis = async () => {
+        setIsAnalyzing(true);
+        setAiAnalysis("");
+        
+        const prompt = `Analisis data getaran akselerometer ADXL354 saat ini:
+- Amplitudo Getaran Aktual: Sumbu X = ${latestData.x.toFixed(2)}g, Sumbu Y = ${latestData.y.toFixed(2)}g, Sumbu Z = ${latestData.z.toFixed(2)}g
+- Ambang Batas Getaran (Threshold): ${threshold.toFixed(1)}g
+- Status Keamanan: ${currentStatus.toUpperCase()}
+
+Harap berikan diagnosis teknik yang ringkas mengenai kesehatan mesin berdasarkan data tersebut:
+1. Analisis kontribusi getaran pada masing-masing sumbu ADXL354.
+2. Prediksi kegagalan fisik (misal: misalignment kopling, keausan bearing) berdasarkan sumbu dominan yang bergetar.
+3. Langkah pencegahan yang disarankan untuk operator mesin.
+Format keluaran dalam Markdown terstruktur yang rapi dan profesional menggunakan Bahasa Indonesia.`;
+
+        const systemPrompt = `Anda adalah seorang ahli teknik mesin dan vibration engineer spesialis sensor MEMS ADXL354. Tugas Anda adalah melakukan analisis struktur getaran getaran 3-sumbu.`;
+
+        const result = await callGeminiAPI(prompt, systemPrompt);
+        setAiAnalysis(result);
+        setIsAnalyzing(false);
+      };
+
+      return (
+        <div className="space-y-6">
+          {showGuide && (
+            <div className="bg-gradient-to-r from-blue-900/40 to-indigo-950/40 border border-blue-500/20 rounded-2xl p-5 relative flex flex-col md:flex-row items-start md:items-center gap-4">
+              <div className="p-3 bg-blue-500/10 rounded-xl text-blue-400">
+                <i data-lucide="book-open" class="h-7 w-7"></i>
+              </div>
+              <div className="flex-1">
+                <h4 className="font-bold text-white text-base">Panduan Pengguna Sensor ADXL354</h4>
+                <p className="text-sm text-slate-300 mt-1">
+                  Sensor ADXL354 MEMS mengukur getaran pada 3 Sumbu utama secara simultan: Sumbu Z (Vertikal), Sumbu X (Radial), dan Sumbu Y (Aksial). Ambang batas aman pengoperasian motor dikunci pada tingkat standar deviasi industri sebesar 2.5 g.
+                </p>
+              </div>
+              <button 
+                onClick={() => setShowGuide(false)}
+                className="text-xs text-slate-400 hover:text-white bg-slate-800/60 px-3 py-1.5 rounded-lg border border-slate-700/60 transition-colors"
+              >
+                Sembunyikan
+              </button>
+            </div>
+          )}
+
+          {/* Header Dashboard */}
+          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 glass-panel p-6 rounded-2xl">
+            <div>
+              <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                <i data-lucide="activity" class="text-blue-500"></i> Live Terminal WiVMS (ADXL354)
+              </h2>
+              <p className="text-slate-400 text-sm mt-1">Sistem Pemantauan Getaran Terpadu menggunakan Sensor Akselerometer Analog MEMS</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2 bg-slate-900/80 px-4 py-2 rounded-xl border border-slate-800">
+                <span className="relative flex h-3 w-3">
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${isOnline ? 'bg-emerald-400' : 'bg-red-400'}`}></span>
+                  <span className={`relative inline-flex rounded-full h-3 w-3 ${isOnline ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+                </span>
+                <span className="text-sm font-semibold text-slate-300">{isOnline ? 'ESP32: Online' : 'ESP32: Terputus'}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Kartu Status Getaran */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <StatusCard 
+              title="Status Kondisi Mesin" 
+              value={isNormal ? 'Optimal' : isWarning ? 'Waspada' : 'Bahaya!'} 
+              icon="activity"
+              gradient={isNormal ? 'from-emerald-500/20 to-transparent border-emerald-500/30' : isWarning ? 'from-amber-500/20 to-transparent border-amber-500/30' : 'from-red-500/20 to-transparent border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.2)]'}
+              desc={`Batas Toleransi Getaran: ${threshold.toFixed(1)} g`}
+              valueColor={isNormal ? 'text-emerald-400' : isWarning ? 'text-amber-400' : 'text-red-500'}
+            />
+            <StatusCard 
+              title="Sumbu Z (Vertikal)" 
+              value={`${latestData.z ? latestData.z.toFixed(2) : '1.00'} g`} 
+              icon="activity"
+              gradient="from-blue-500/10 to-transparent border-blue-500/20"
+              desc="Tegak Lurus Mesin"
+              valueColor="text-white"
+            />
+            <StatusCard 
+              title="Akselerasi Puncak (Max)" 
+              value={`${maxCurrentVib.toFixed(2)} g`} 
+              icon="cpu"
+              gradient="from-purple-500/10 to-transparent border-purple-500/20"
+              desc="Kekuatan Kejut Maksimal"
+              valueColor="text-white"
+            />
+          </div>
+
+          {/* Area Grafik & Visualisasi */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 glass-panel p-6 rounded-2xl flex flex-col h-[450px]">
+              <div className="flex flex-col sm:flex-row justify-between sm:items-end gap-3 mb-6">
+                <div>
+                  <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                    <i data-lucide="activity" class="text-blue-400"></i> Osiloskop Getaran ADXL354 Real-time
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-1">Sumbu X (Radial/Horisontal), Sumbu Y (Aksial), Sumbu Z (Vertikal)</p>
+                </div>
+                <div className="flex gap-3 text-sm font-mono bg-slate-900/50 px-3 py-1.5 rounded-lg border border-slate-800 self-start">
+                  <span className="text-red-400 font-semibold">X: {latestData.x ? latestData.x.toFixed(2) : '0.00'}</span>
+                  <span className="text-emerald-400 font-semibold">Y: {latestData.y ? latestData.y.toFixed(2) : '0.00'}</span>
+                  <span className="text-blue-400 font-semibold">Z: {latestData.z ? latestData.z.toFixed(2) : '0.00'}</span>
+                </div>
+              </div>
+              
+              <div className="flex-1 w-full relative overflow-hidden bg-slate-950 rounded-xl border border-slate-850 shadow-inner">
+                {hasData ? (
+                   <EnhancedChartSim data={data} />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-slate-500 animate-pulse font-medium">Menunggu stream data dari ESP32...</div>
+                )}
+                
+                <div className="absolute inset-0 pointer-events-none flex flex-col justify-between opacity-10">
+                   {[...Array(6)].map((_, i) => <div key={i} className="w-full border-b border-white border-dashed h-1/5"></div>)}
+                </div>
+              </div>
+            </div>
+
+            {/* Visualisasi Guncangan Mesin ADXL354 */}
+            <div className="space-y-6">
+              <div className="glass-panel p-6 rounded-2xl flex flex-col items-center justify-center h-[450px] relative overflow-hidden">
+                 {isDanger && <div className="absolute inset-0 bg-red-500/10 animate-pulse pointer-events-none"></div>}
+                 {isWarning && <div className="absolute inset-0 bg-amber-500/5 animate-pulse pointer-events-none"></div>}
+                 <h3 className="text-sm font-bold text-slate-300 mb-6 uppercase tracking-widest w-full text-center border-b border-slate-800 pb-2">Visualizer Mesin & Sensor</h3>
+                 
+                 <div className={`relative transition-all duration-300 ${motorVibrateClass}`}>
+                    <svg className="w-48 h-48 drop-shadow-2xl" viewBox="0 0 200 200" fill="none">
+                      <rect x="30" y="140" width="140" height="20" rx="4" fill="#334155" />
+                      <rect x="50" y="160" width="10" height="15" fill="#475569" />
+                      <rect x="140" y="160" width="10" height="15" fill="#475569" />
+                      
+                      <rect x="40" y="60" width="120" height="80" rx="10" fill="#1e293b" stroke="#475569" strokeWidth="3" />
+                      <line x1="160" y1="100" x2="185" y2="100" stroke="#64748b" strokeWidth="12" strokeLinecap="round" />
+                      
+                      <line x1="60" y1="70" x2="60" y2="130" stroke="#334155" strokeWidth="4" />
+                      <line x1="80" y1="70" x2="80" y2="130" stroke="#334155" strokeWidth="4" />
+                      <line x1="100" y1="70" x2="100" y2="130" stroke="#334155" strokeWidth="4" />
+                      <line x1="120" y1="70" x2="120" y2="130" stroke="#334155" strokeWidth="4" />
+                      <line x1="140" y1="70" x2="140" y2="130" stroke="#334155" strokeWidth="4" />
+                      
+                      <rect x="80" y="30" width="40" height="30" rx="4" fill="#047857" stroke="#34d399" strokeWidth="2" />
+                      <circle cx="100" cy="45" r="5" fill="#facc15" />
+                      
+                      <text x="86" y="24" fill="#a7f3d0" fontSize="8" fontFamily="monospace" fontWeight="bold">ADXL354</text>
+                      <path d="M120,45 Q150,45 160,80" fill="none" stroke={isNormal ? "#10b981" : isWarning ? "#f59e0b" : "#ef4444"} strokeWidth="2" strokeDasharray="4" />
+                    </svg>
+                 </div>
+                 
+                 <div className="mt-8 text-center">
+                   <p className={`font-mono text-base font-bold ${isNormal ? 'text-emerald-400' : isWarning ? 'text-amber-400' : 'text-red-500'}`}>
+                      {isNormal ? 'VIBRASI: OPTIMAL' : isWarning ? 'VIBRASI: WASPADA' : 'VIBRASI: BAHAYA'}
+                   </p>
+                   <p className="text-xs text-slate-500 font-mono mt-1">Amplitudo Getaran: {maxCurrentVib.toFixed(2)} g</p>
+                 </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Diagnosis AI Box */}
+          <div className="glass-panel p-6 rounded-2xl border border-slate-800 relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
+              <i data-lucide="sparkles" class="text-yellow-400 h-28 w-28"></i>
+            </div>
+            
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 pb-4 border-b border-slate-800/60">
+              <div>
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                  <i data-lucide="sparkles" class="text-yellow-400"></i> Analisis Diagnostik AI ✨
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">Gunakan model Gemini LLM untuk menganalisis kontribusi sumbu getaran sensor ADXL354 secara instan</p>
+              </div>
+              <button 
+                onClick={triggerAIDiagnosis}
+                disabled={isAnalyzing || !hasData}
+                className="w-full sm:w-auto px-5 py-2.5 rounded-xl font-bold text-sm bg-gradient-to-r from-yellow-500 to-amber-600 hover:from-yellow-400 hover:to-amber-500 text-slate-950 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isAnalyzing ? (
+                  <>
+                    <i data-lucide="refresh-cw" class="animate-spin h-4 w-4"></i> Menganalisis...
+                  </>
+                ) : (
+                  <>
+                    <i data-lucide="sparkles" class="h-4 w-4"></i> Analisis Diagnostik AI ✨
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="bg-slate-950/80 rounded-xl p-5 border border-slate-850 min-h-[120px]">
+              {isAnalyzing ? (
+                <div className="flex flex-col items-center justify-center py-8 space-y-3">
+                  <div className="w-8 h-8 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin"></div>
+                  <p className="text-xs text-slate-400 font-mono animate-pulse">Gemini sedang merumuskan matriks getaran...</p>
+                </div>
+              ) : aiAnalysis ? (
+                <div className="prose prose-invert max-w-none text-sm text-slate-300 leading-relaxed whitespace-pre-line font-sans">
+                  {aiAnalysis}
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-6 text-center text-slate-500">
+                  <i data-lucide="activity" class="mb-2 text-slate-600 h-8 w-8"></i>
+                  <p className="text-xs">Klik tombol **"Analisis Diagnostik AI ✨"** di atas untuk memeriksa kondisi fisik motor DC berdasarkan data saat ini.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // --- VIEW: RIWAYAT DATA ---
+    function HistoryView({ history, onClear }) {
+      const [searchTerm, setSearchTerm] = useState('');
+      const [statusFilter, setStatusFilter] = useState('all');
+
+      useEffect(() => {
+        lucide.createIcons();
+      }, [history, searchTerm, statusFilter]);
+
+      const filteredHistory = history.filter(item => {
+        const matchesSearch = item.time.includes(searchTerm);
+        const matchesFilter = statusFilter === 'all' || item.status === statusFilter;
+        return matchesSearch && matchesFilter;
+      });
+
+      const handleExportCSV = () => {
+        let csvContent = "data:text/csv;charset=utf-8,ID,Waktu,Sumbu X (g),Sumbu Y (g),Sumbu Z (g),Status\n";
+        filteredHistory.forEach(item => {
+          csvContent += `${item.id},${item.time},${item.x},${item.y},${item.z},${item.status}\n`;
+        });
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `ADXL354_Vibration_History_${Date.now()}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      };
+
+      return (
+        <div className="animate-fade-in space-y-6">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 glass-panel p-6 rounded-2xl">
+            <div>
+              <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                <i data-lucide="history" class="text-indigo-400"></i> Riwayat Analitik ADXL354
+              </h2>
+              <p className="text-slate-400 text-sm mt-1">Daftar rekaman kondisi getaran abnormal di atas batas toleransi aman</p>
+            </div>
+            <div className="flex items-center gap-2 w-full md:w-auto">
+              <button 
+                onClick={handleExportCSV}
+                disabled={filteredHistory.length === 0}
+                className="flex-1 md:flex-none px-4 py-2 rounded-xl text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/30"
+              >
+                <i data-lucide="download" class="h-4 w-4"></i> Unduh CSV (.csv)
+              </button>
+              <button 
+                onClick={onClear}
+                className="px-4 py-2 rounded-xl text-sm font-semibold bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 transition-all flex items-center gap-2"
+              >
+                <i data-lucide="trash-2" class="h-4 w-4"></i> Bersihkan
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="relative">
+              <i data-lucide="search" class="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 h-4.5 w-4.5"></i>
+              <input 
+                type="text" 
+                placeholder="Cari berdasarkan waktu..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full bg-slate-900/80 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+              />
+            </div>
+            <div>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full bg-slate-900/80 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition-colors cursor-pointer"
+              >
+                <option value="all">Semua Status</option>
+                <option value="normal">Status Optimal (Normal)</option>
+                <option value="warning">Status Waspada</option>
+                <option value="danger">Status Bahaya (Anomali)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="glass-panel rounded-2xl overflow-hidden border border-slate-800">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-900/80 border-b border-slate-800 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                    <th className="px-6 py-4">Waktu</th>
+                    <th className="px-6 py-4 text-red-400">X (Radial)</th>
+                    <th className="px-6 py-4 text-emerald-400">Y (Aksial)</th>
+                    <th className="px-6 py-4 text-blue-400">Z (Vertikal)</th>
+                    <th className="px-6 py-4">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/50 text-sm font-medium">
+                  {filteredHistory.length === 0 ? (
+                    <tr>
+                      <td colSpan="5" className="px-6 py-12 text-center text-slate-500 italic">
+                        Tidak ditemukan data riwayat getaran.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredHistory.map((item) => (
+                      <tr key={item.id} className="hover:bg-slate-900/30 transition-colors">
+                        <td className="px-6 py-4 font-mono text-slate-300">{item.time}</td>
+                        <td className="px-6 py-4 font-mono text-red-300/90">{item.x.toFixed(2)} g</td>
+                        <td className="px-6 py-4 font-mono text-emerald-300/90">{item.y.toFixed(2)} g</td>
+                        <td className="px-6 py-4 font-mono text-blue-300/90">{item.z.toFixed(2)} g</td>
+                        <td className="px-6 py-4">
+                          <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border
+                            ${item.status === 'danger' 
+                              ? 'bg-red-500/10 text-red-400 border-red-500/20' 
+                              : item.status === 'warning'
+                              ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                              : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                            }`}
+                          >
+                            {item.status === 'danger' ? 'BAHAYA' : item.status === 'warning' ? 'WASPADA' : 'OPTIMAL'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // --- VIEW: ASISTEN CHAT AI ---
+    function AIAssistantView() {
+      const [messages, setMessages] = useState([
+        {
+          sender: 'ai',
+          text: 'Halo! Saya adalah Asisten Virtual WiVMS ✨. Saya dikonfigurasi khusus dengan detail proposal Capstone Design Teknik Elektro ITERA (Nomor Dokumen: TA2526.01.099).\n\nAda yang bisa saya bantu terkait sensor MEMS ADXL354, modul ESP32, atau metode analisis getaran nirkabel?'
+        }
+      ]);
+      const [inputText, setInputText] = useState('');
+      const [loading, setLoading] = useState(false);
+      const chatEndRef = useRef(null);
+
+      useEffect(() => {
+        lucide.createIcons();
+        if (chatEndRef.current) {
+          chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, [messages, loading]);
+
+      const handleSendMessage = async (e) => {
+        e.preventDefault();
+        if (!inputText.trim() || loading) return;
+
+        const userMsg = inputText;
+        setInputText('');
+        setMessages(prev => [...prev, { sender: 'user', text: userMsg }]);
+        setLoading(true);
+
+        const systemPrompt = `Anda adalah Asisten Virtual AI untuk proyek WiVMS (Wireless Vibration Monitoring System) - Capstone Design Teknik Elektro ITERA (TA2526.01.099).
+Anggota Tim: Endy Tupala (Ketua, 122130040), M. Khoirudin Alfaqih (122130006), Richard Alvin Julianto (122130037).
+Dosen Pembimbing: Tria Kasnalestari, S.T., M.T. (Pembimbing I) & Efa Maydhona Saputra, S.T., M.T. (Pembimbing II).
+
+Detail Proyek berdasarkan Proposal EL1:
+- Sistem menggunakan sensor accelerometer MEMS ADXL354 terintegrasi dengan ESP32 untuk memantau vibrasi motor DC (3 sumbu: X, Y, Z).
+- Tanpa sensor arus, RPM, maupun sirkuit nirkabel daya (WPT) di dalam dashboard monitoring saat ini.
+- Menampilkan grafik osiloskop getaran real-time dan log data via Web Dashboard.`;
+
+        try {
+          const responseText = await callGeminiAPI(userMsg, systemPrompt);
+          setMessages(prev => [...prev, { sender: 'ai', text: responseText }]);
+        } catch (error) {
+          setMessages(prev => [...prev, { sender: 'ai', text: 'Maaf, terjadi kesalahan teknis saat menghubungi sistem AI.' }]);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      return (
+        <div className="max-w-4xl mx-auto space-y-6">
+          <div className="glass-panel p-6 rounded-2xl border border-slate-800">
+            <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+              <i data-lucide="sparkles" class="text-yellow-400"></i> Asisten Virtual WiVMS ✨
+            </h2>
+            <p className="text-slate-400 text-xs mt-1">Konsultasikan analisis getaran, diagram 5 Why, atau integrasi sensor ADXL354 Anda</p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <div className="lg:col-span-1 space-y-3">
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider px-1">Pertanyaan Cepat</h4>
+              {["Bagaimana prinsip pengukuran getaran 3 sumbu pada sensor ADXL354?", "Mengapa analisis getaran efektif untuk mendeteksi keausan bearing?", "Siapa saja tim pengembang proyek ini?"].map((sug, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setInputText(sug)}
+                  className="w-full text-left p-3 rounded-xl bg-slate-900/60 border border-slate-850 hover:bg-slate-800/80 hover:border-blue-500/30 text-xs text-slate-300 transition-all leading-relaxed"
+                >
+                  {sug}
+                </button>
+              ))}
+            </div>
+
+            <div className="lg:col-span-3 glass-panel rounded-2xl flex flex-col h-[520px] overflow-hidden border border-slate-800">
+              <div className="flex-1 overflow-y-auto custom-scrollbar p-5 space-y-4 bg-slate-950/40">
+                {messages.map((msg, index) => (
+                  <div key={index} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-line shadow-md ${msg.sender === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none'}`}>
+                      {msg.sender === 'ai' && (
+                        <div className="flex items-center gap-1.5 mb-1 text-[10px] font-bold text-yellow-400 uppercase tracking-widest">
+                          <i data-lucide="sparkles" class="h-3 w-3"></i> WiVMS AI
+                        </div>
+                      )}
+                      {msg.text}
+                    </div>
+                  </div>
+                ))}
+                {loading && (
+                  <div className="flex justify-start animate-pulse">
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl rounded-tl-none px-4 py-3 text-sm text-slate-400 flex items-center gap-2">
+                      <span className="w-2 h-2 bg-yellow-400 rounded-full animate-bounce"></span>
+                      <span className="w-2 h-2 bg-yellow-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                      <span>Gemini sedang mengetik...</span>
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              <form onSubmit={handleSendMessage} className="p-4 bg-slate-900/80 border-t border-slate-800 flex gap-2">
+                <input
+                  type="text"
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  placeholder="Tanyakan sesuatu tentang WiVMS..."
+                  className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
+                />
+                <button
+                  type="submit"
+                  disabled={loading || !inputText.trim()}
+                  className="p-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-all disabled:opacity-40"
+                >
+                  <i data-lucide="send" class="h-4 w-4"></i>
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // --- VIEW: TENTANG PROYEK ---
+    function AboutView() {
+      return (
+        <div className="max-w-4xl mx-auto space-y-8">
+          <div className="text-center mb-10">
+            <h2 className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400 inline-block mb-3">Detail Usulan Proyek</h2>
+            <p className="text-slate-400">Dokumen EL1: TA2526.01.099</p>
+          </div>
+          
+          <div className="grid gap-6">
+            <div className="glass-panel rounded-2xl p-8 border-l-4 border-l-amber-500">
+              <h3 className="text-2xl font-bold text-white mb-4 flex items-center gap-3">
+                <div className="p-2 bg-amber-500/20 rounded-lg"><i data-lucide="alert-triangle" class="text-amber-400"></i></div>
+                Latar Belakang & Masalah
+              </h3>
+              <p className="text-slate-300 leading-relaxed text-justify mb-4">
+                Motor DC banyak digunakan pada berbagai perangkat rumah tangga seperti pompa air kecil dan kipas angin. Seiring waktu pemakaian, komponen mekanik dapat mengalami ketidakseimbangan, keausan, maupun kerusakan mekanis yang ditandai dengan perubahan getaran. Namun, kerusakan sering terlambat dideteksi karena ketiadaan sistem pemantauan kontinu.
+              </p>
+              <p className="text-slate-300 leading-relaxed text-justify">
+                Penggunaan <b>kabel</b> pada sensor konvensional sangat berisiko rusak karena getaran konstan dan menyulitkan instalasi di area yang sempit. Sebaliknya, penggunaan baterai menimbulkan ketergantungan perawatan berkala.
+              </p>
+            </div>
+
+            <div className="glass-panel rounded-2xl p-8 border-l-4 border-l-emerald-500">
+              <h3 className="text-2xl font-bold text-white mb-4 flex items-center gap-3">
+                <div className="p-2 bg-emerald-500/20 rounded-lg"><i data-lucide="check-circle-2" class="text-emerald-400"></i></div>
+                Solusi Utama (WiVMS)
+              </h3>
+              <div className="grid sm:grid-cols-1 gap-4 mt-6">
+                <div className="bg-slate-900/50 p-5 rounded-xl border border-slate-700/50">
+                  <h4 className="font-bold text-white mb-2">Sensor ADXL354 & IoT</h4>
+                  <p className="text-sm text-slate-400">Mikrokontroler ESP32 memproses data getaran akselerometer MEMS ADXL354 berdaya rendah, lalu mengirimkannya langsung ke website ini melalui jaringan Wi-Fi laboratorium.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // --- VIEW: TIM PENGEMBANG ---
+    function TeamView() {
+      return (
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center mb-14">
+            <h2 className="text-4xl font-extrabold text-white mb-4">Tim Pengembang</h2>
+            <p className="text-slate-400 text-lg">Capstone Design - Teknik Elektro ITERA</p>
+          </div>
+
+          <div className="mb-14 relative">
+            <h3 className="text-2xl font-bold mb-8 text-center text-blue-300 tracking-wide uppercase">Mahasiswa</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              <ProfileCard name="Endy Tupala" nim="122130040" role="Ketua Tim / Pelaksana Utama" />
+              <ProfileCard name="M. Khoirudin Alfaqih" nim="122130006" role="Anggota Tim" />
+              <ProfileCard name="Richard Alvin Julianto" nim="122130037" role="Anggota Tim" />
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-2xl font-bold mb-8 text-center text-purple-300 tracking-wide uppercase">Dosen Pembimbing</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-3xl mx-auto">
+              <ProfileCard name="Tria Kasnalestari, S.T., M.T." nip="19920917 202203 2 012" role="Dosen Pembimbing I" isLecturer={true} />
+              <ProfileCard name="Efa Maydhona S., S.T., M.T." nip="19870505 201504 1 005" role="Dosen Pembimbing II" isLecturer={true} />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // --- GRAFIK OSILOSKOP SVG ---
+    function EnhancedChartSim({ data }) {
+      const maxVal = 4; const height = 100;
+      
+      const generatePoints = (axis, isPolygon = false) => {
+        const points = data.map((d, i) => {
+          const x = (i / 24) * 100;
+          const y = height - ((d[axis] + maxVal) / (maxVal * 2)) * height;
+          return `${x},${y}`;
+        }).join(' ');
+        
+        if (isPolygon) {
+          return `0,${height} ${points} 100,${height}`;
+        }
+        return points;
+      };
+
+      return (
+        <svg className="w-full h-full" viewBox={`0 0 100 ${height}`} preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="gradX" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="#ef4444" stopOpacity="0.3"/>
+              <stop offset="100%" stopColor="#ef4444" stopOpacity="0"/>
+            </linearGradient>
+            <linearGradient id="gradY" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="#10b981" stopOpacity="0.3"/>
+              <stop offset="100%" stopColor="#10b981" stopOpacity="0"/>
+            </linearGradient>
+            <linearGradient id="gradZ" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.3"/>
+              <stop offset="100%" stopColor="#3b82f6" stopOpacity="0"/>
+            </linearGradient>
+          </defs>
+
+          <polygon fill="url(#gradZ)" points={generatePoints('z', true)} />
+          <polygon fill="url(#gradY)" points={generatePoints('y', true)} />
+          <polygon fill="url(#gradX)" points={generatePoints('x', true)} />
+
+          <polyline fill="none" stroke="#ef4444" strokeWidth="0.8" points={generatePoints('x')} />
+          <polyline fill="none" stroke="#10b981" strokeWidth="0.8" points={generatePoints('y')} />
+          <polyline fill="none" stroke="#3b82f6" strokeWidth="0.8" points={generatePoints('z')} />
+        </svg>
+      );
+    }
+
+    // --- SUB KOMPONEN UI PENDUKUNG ---
+    function NavButton({ icon, label, active, onClick, isSparkle = false }) {
+      return (
+        <button 
+          onClick={onClick}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl transition-all duration-300 text-sm font-semibold
+            ${active 
+              ? 'bg-blue-600 shadow-[0_0_15px_rgba(37,99,235,0.5)] text-white' 
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/80'}`}
+        >
+          <i data-lucide={icon} class={`h-4.5 w-4.5 ${isSparkle ? 'text-yellow-400' : ''}`}></i>
+          {label}
+        </button>
+      );
+    }
+
+    function StatusCard({ title, value, icon, gradient, desc, valueColor }) {
+      return (
+        <div className={`glass-panel border-b-0 border-l-0 border-r-0 border-t-4 border-t-blue-500 bg-gradient-to-b ${gradient} rounded-2xl p-6 transition-transform hover:-translate-y-1 duration-300`}>
+          <div className="flex justify-between items-start mb-4">
+            <div className="p-3 bg-slate-900/60 backdrop-blur-md rounded-xl border border-slate-700/50">
+              <i data-lucide={icon} class="h-6 w-6 text-blue-400"></i>
+            </div>
+          </div>
+          <div>
+            <h4 className="text-slate-400 text-sm font-semibold tracking-wide">{title}</h4>
+            <div className={`text-3xl font-extrabold mt-2 mb-1 ${valueColor}`}>{value}</div>
+            <p className="text-xs text-slate-500 font-medium">{desc}</p>
+          </div>
+        </div>
+      );
+    }
+
+    function ProfileCard({ name, nim, nip, role, isLecturer = false }) {
+      return (
+        <div className="glass-panel p-8 rounded-2xl text-center hover:-translate-y-2 transition-all duration-300">
+          <div className={`w-24 h-24 mx-auto rounded-full flex items-center justify-center mb-6 shadow-xl border-2
+            ${isLecturer ? 'bg-purple-900/30 text-purple-400 border-purple-500/30' : 'bg-blue-900/30 text-blue-400 border-blue-500/30'}`}>
+            <i data-lucide="users" class="h-10 w-10"></i>
+          </div>
+          <h4 className="font-extrabold text-xl text-white mb-2">{name}</h4>
+          <p className="text-slate-400 text-sm font-mono mb-4 bg-slate-900/50 inline-block px-3 py-1 rounded-lg border border-slate-800">{nim ? `NIM: ${nim}` : `NIP: ${nip}`}</p>
+          <div className="mt-2">
+            <span className={`text-xs font-bold px-4 py-2 rounded-full uppercase tracking-wider
+              ${isLecturer ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}`}>
+              {role}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    // Render App ke DOM root
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+
+    // Inisialisasi ikon Lucide di browser
+    setTimeout(() => {
+      lucide.createIcons();
+    }, 100);
+  </script>
+</body>
+</html>
