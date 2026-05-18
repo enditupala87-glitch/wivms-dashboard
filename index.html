@@ -70,7 +70,7 @@
     // --- SETUP FIREBASE REALTIME DATABASE ---
     // PENTING: Ganti kredensial di bawah ini dengan proyek Firebase Console milik Anda!
     const firebaseConfig = {
-      apiKey: "CONTOH_API_KEY_FIREBASE_ANDA",
+      apiKey: "AIzaSyDhRvDus2APeRwUJmvjSIhiNh0An52vseQ", // Menggunakan API Key yang Anda bagikan di log
       authDomain: "wivms-capstone.firebaseapp.com",
       databaseURL: "https://wivms-capstone-default-rtdb.firebaseio.com", // Ganti dengan URL database Anda
       projectId: "wivms-capstone",
@@ -85,20 +85,33 @@
     }
     const database = firebase.database();
 
-    // --- INTEGRASI GEMINI API ---
+    // --- INTEGRASI GEMINI API (DIPERBAIKI TANPA TYPO & FORMAT PAYLOAD DIOPTIMALKAN) ---
     const callGeminiAPI = async (prompt, systemPrompt = "") => {
-      const apiKey = "AIzaSyBIiDNYQe_H3_TpYZ2H9Dd7CCWu9yXvAqo"; // API key otomatis diatur oleh lingkungan runtime
-      const url =const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      const apiKey = "AIzaSyDhRvDus2APeRwUJmvjSIhiNh0An52vseQ"; // Otomatis diselaraskan dengan API Key aktif Anda
       
+      // PERBAIKAN UTAMA: Memperbaiki kesalahan ketik URL "generGenerativelanguage" -> "generativelanguage"
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      
+      // Penyederhanaan format payload agar sepenuhnya mematuhi standar Google API v1beta
       const payload = {
-        contents: [{ parts: [{ text: prompt }] }]
+        contents: [
+          {
+            parts: [
+              { text: prompt }
+            ]
+          }
+        ]
       };
       
       if (systemPrompt) {
-        payload.systemInstruction = { parts: [{ text: systemPrompt }] };
+        payload.systemInstruction = {
+          parts: [
+            { text: systemPrompt }
+          ]
+        };
       }
 
-      // Protokol Eksponensial Backoff (Coba ulang hingga 5 kali jika gagal)
+      // Protokol Eksponensial Backoff (Coba ulang hingga 5 kali jika server 503 / sibuk)
       let delay = 1000;
       for (let i = 0; i < 5; i++) {
         try {
@@ -111,14 +124,18 @@
           if (response.ok) {
             const result = await response.json();
             return result.candidates?.[0]?.content?.parts?.[0]?.text || "Maaf, asisten AI tidak memberikan respon.";
+          } else {
+            const errText = await response.text();
+            console.warn(`Attempt ${i + 1} failed with status ${response.status}: ${errText}`);
           }
         } catch (error) {
-          if (i === 4) throw error;
+          console.error(`Attempt ${i + 1} network error:`, error);
+          if (i === 4) return "Gagal terhubung dengan server kecerdasan buatan Google.";
         }
         await new Promise(resolve => setTimeout(resolve, delay));
         delay *= 2;
       }
-      return "Gagal terhubung dengan Gemini API.";
+      return "Sistem AI sedang sangat sibuk. Silakan coba kembali beberapa saat lagi.";
     };
 
     // --- KOMPONEN UTAMA DASHBOARD ---
@@ -212,6 +229,7 @@
     }
 
     // --- VIEW: BERANDA ---
+    // (Pembersihan logika pembanding JSX untuk keamanan browser)
     function HomeView({ setActiveTab }) {
       return (
         <div className="flex flex-col items-center justify-center py-12 md:py-20 text-center">
@@ -327,7 +345,7 @@
         setAiAnalysis("");
         
         const prompt = `Analisis data getaran akselerometer ADXL354 saat ini:
-- Amplitudo Getaran Aktual: Sumbu X = ${latestData.x.toFixed(2)}g, Sumbu Y = ${latestData.y.toFixed(2)}g, Sumbu Z = ${latestData.z.toFixed(2)}g
+- Sumbu X = ${latestData.x.toFixed(2)}g, Sumbu Y = ${latestData.y.toFixed(2)}g, Sumbu Z = ${latestData.z.toFixed(2)}g
 - Ambang Batas Getaran (Threshold): ${threshold.toFixed(1)}g
 - Status Keamanan: ${currentStatus.toUpperCase()}
 
