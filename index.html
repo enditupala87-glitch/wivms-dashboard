@@ -87,8 +87,8 @@
 
     // --- INTEGRASI GEMINI API ---
     const callGeminiAPI = async (prompt, systemPrompt = "") => {
-      const apiKey = "AIzaSyDhRvDus2APeRwUJmvjSIhiNh0An52vseQ"; // API key otomatis diatur oleh lingkungan runtime
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      const apiKey = "AIzaSyBIiDNYQe_H3_TpYZ2H9Dd7CCWu9yXvAqo"; // API key otomatis diatur oleh lingkungan runtime
+      const url =const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
       
       const payload = {
         contents: [{ parts: [{ text: prompt }] }]
