@@ -85,11 +85,11 @@
     }
     const database = firebase.database();
 
-    // --- INTEGRASI GEMINI API (DIPERBAIKI TANPA TYPO & FORMAT PAYLOAD DIOPTIMALKAN) ---
+    // --- INTEGRASI GEMINI API ---
     const callGeminiAPI = async (prompt, systemPrompt = "") => {
       const apiKey = "AIzaSyDhRvDus2APeRwUJmvjSIhiNh0An52vseQ"; // Otomatis diselaraskan dengan API Key aktif Anda
       
-      // PERBAIKAN UTAMA: Memperbaiki kesalahan ketik URL "generGenerativelanguage" -> "generativelanguage"
+      // PERBAIKAN: Memastikan hanya ada satu deklarasi variabel url
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
       
       // Penyederhanaan format payload agar sepenuhnya mematuhi standar Google API v1beta
@@ -229,7 +229,6 @@
     }
 
     // --- VIEW: BERANDA ---
-    // (Pembersihan logika pembanding JSX untuk keamanan browser)
     function HomeView({ setActiveTab }) {
       return (
         <div className="flex flex-col items-center justify-center py-12 md:py-20 text-center">
@@ -915,6 +914,7 @@ Detail Proyek berdasarkan Proposal EL1:
     }
 
     // --- SUB KOMPONEN UI PENDUKUNG ---
+    // Menggunakan tag icon Lucide dengan benar
     function NavButton({ icon, label, active, onClick, isSparkle = false }) {
       return (
         <button 
@@ -970,7 +970,7 @@ Detail Proyek berdasarkan Proposal EL1:
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
 
-    // Inisialisasi ikon Lucide di browser
+    // Inisialisasi ikon Lucide di browser setelah React siap
     setTimeout(() => {
       lucide.createIcons();
     }, 100);
